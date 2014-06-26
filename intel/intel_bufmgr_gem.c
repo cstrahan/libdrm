@@ -66,12 +66,33 @@
 
 #include "i915_drm.h"
 
+#include "monotonic_timer.h"
+
 #ifdef HAVE_VALGRIND
 #include <valgrind.h>
 #include <memcheck.h>
 #define VG(x) x
 #else
 #define VG(x)
+#endif
+
+#if defined(__APPLE__) && defined(__MACH__)
+#include <mach/mach_time.h>
+
+static double nsmul;
+static void __attribute__((constructor)) init_info() {
+  mach_timebase_info_data_t nsratio = mach_timebase_info(&nsratio);
+  nsmul = (double)nsratio.numer / nsratio.denom;
+}
+
+static int darwin_clock_gettime(struct timespec *ts)
+{
+  uint64_t nsecs = mach_absolute_time() * nsmul;
+  ts->tv_sec = nsecs / 1000000000ULL;
+  ts->tv_nsec = nsecs - ts->tv_sec * 1000000000ULL;
+  return 0;
+}
+
 #endif
 
 #define VG_CLEAR(s) VG(memset(&s, 0, sizeof(s)))
@@ -1157,7 +1178,11 @@ static void drm_intel_gem_bo_unreference(drm_intel_bo *bo)
 		    (drm_intel_bufmgr_gem *) bo->bufmgr;
 		struct timespec time;
 
+#if defined(__APPLE__) && defined(__MACH__)
+		darwin_clock_gettime(&time);
+#else
 		clock_gettime(CLOCK_MONOTONIC, &time);
+#endif
 
 		pthread_mutex_lock(&bufmgr_gem->lock);
 		drm_intel_gem_bo_unreference_final(bo, time.tv_sec);
@@ -1773,7 +1798,11 @@ drm_intel_gem_bo_clear_relocs(drm_intel_bo *bo, int start)
 	int i;
 	struct timespec time;
 
+#if defined(__APPLE__) && defined(__MACH__)
+	darwin_clock_gettime(&time);
+#else
 	clock_gettime(CLOCK_MONOTONIC, &time);
+#endif
 
 	assert(bo_gem->reloc_count >= start);
 	/* Unreference the cleared target buffers */

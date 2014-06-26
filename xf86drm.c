@@ -59,6 +59,25 @@
 
 #include "xf86drm.h"
 
+#if defined(__APPLE__) && defined(__MACH__)
+#include <mach/mach_time.h>
+
+static double nsmul;
+static void __attribute__((constructor)) init_info() {
+  mach_timebase_info_data_t nsratio = mach_timebase_info(&nsratio);
+  nsmul = (double)nsratio.numer / nsratio.denom;
+}
+
+static int darwin_clock_gettime(struct timespec *ts)
+{
+  uint64_t nsecs = mach_absolute_time() * nsmul;
+  ts->tv_sec = nsecs / 1000000000ULL;
+  ts->tv_nsec = nsecs - ts->tv_sec * 1000000000ULL;
+  return 0;
+}
+
+#endif
+
 #if defined(__FreeBSD__) || defined(__FreeBSD_kernel__) || defined(__DragonFly__)
 #define DRM_MAJOR 145
 #endif
@@ -1955,7 +1974,11 @@ int drmWaitVBlank(int fd, drmVBlankPtr vbl)
     struct timespec timeout, cur;
     int ret;
 
+#if defined(__APPLE__) && defined(__MACH__)
+    ret = darwin_clock_gettime(&timeout);
+#else
     ret = clock_gettime(CLOCK_MONOTONIC, &timeout);
+#endif
     if (ret < 0) {
 	fprintf(stderr, "clock_gettime failed: %s\n", strerror(errno));
 	goto out;
@@ -1966,7 +1989,11 @@ int drmWaitVBlank(int fd, drmVBlankPtr vbl)
        ret = ioctl(fd, DRM_IOCTL_WAIT_VBLANK, vbl);
        vbl->request.type &= ~DRM_VBLANK_RELATIVE;
        if (ret && errno == EINTR) {
+#if defined(__APPLE__) && defined(__MACH__)
+	       darwin_clock_gettime(&cur);
+#else
 	       clock_gettime(CLOCK_MONOTONIC, &cur);
+#endif
 	       /* Timeout after 1s */
 	       if (cur.tv_sec > timeout.tv_sec + 1 ||
 		   (cur.tv_sec == timeout.tv_sec && cur.tv_nsec >=
